@@ -5,9 +5,14 @@
 """
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from app.collab.errors import CollabError
+from app.collab.router import router as collab_router
+from app.collab.seed import seed_collab
+from app.collab.store import collab_store
 from app.config import settings
 from app.routers import ROUTERS
 from app.store import store
@@ -24,6 +29,23 @@ app.add_middleware(
 
 for module in ROUTERS:
     app.include_router(module.router)
+app.include_router(collab_router)
+
+
+@app.on_event("startup")
+def _seed_collab() -> None:
+    """初始化协作域本地身份、工作空间与示例看板（幂等）。"""
+    if not collab_store.workspaces:
+        seed_collab(collab_store)
+
+
+@app.exception_handler(CollabError)
+async def collab_error_handler(request: Request, exc: CollabError) -> JSONResponse:
+    """协作域错误统一出口：details 只携带调用方本空间数据，绝不回显他空间实体。"""
+    body: dict[str, object] = {"ok": False, "detail": exc.message}
+    if exc.details is not None:
+        body["details"] = exc.details
+    return JSONResponse(status_code=exc.status_code, content=body)
 
 
 @app.get("/api/health")
